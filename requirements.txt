@@ -1,0 +1,6 @@
+aiogram>=3.0.0
+aiohttp
+pydub
+ffmpeg-python       # ffmpeg установлен в системе (это не Python-библиотека!)
+python-dotenv
+

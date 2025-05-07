@@ -1,0 +1,35 @@
+# === Python стандартное ===
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# === Временные и временно созданные файлы ===
+*.log
+*.tmp
+*.bak
+
+# === Переменные окружения и конфиденциальные данные ===
+.env
+.env.*
+*.key
+*.pem
+secrets.json
+
+# === Аудиофайлы и фрагменты (SaluteSpeech) ===
+*.mp3
+*.wav
+*.flac
+*.ogg
+*.m4a
+*.converted.*
+*_part*.mp3
+
+# === Файлы IDE ===
+.vscode/
+.idea/
+
+# === Прочее ===
+.DS_Store
+pip-freeze.txt
