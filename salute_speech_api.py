@@ -52,9 +52,23 @@ async def get_salute_token():
 async def transcribe_audio(file_path: Path) -> str:
     access_token = await get_salute_token()
 
+    # Определяем тип контента по расширению файла
+    suffix = file_path.suffix.lower()
+    if suffix == ".ogg":
+        content_type = "audio/ogg"
+    elif suffix in [".mp3", ".mpeg"]:
+        content_type = "audio/mpeg"
+    elif suffix in [".wav"]:
+        content_type = "audio/wav"
+    else:
+        raise ValueError(f"Неподдерживаемый тип файла для Salute: {suffix}")
+
+    print(f"[DEBUG] Распознаю файл: {file_path.name}, тип: {content_type}")
+
+
     headers = {
         "Authorization": f"Bearer {access_token}",
-        "Content-Type": "audio/mpeg"
+        "Content-Type": content_type
     }
 
     # Создаём асинхронную сессию для HTTP-запросов
