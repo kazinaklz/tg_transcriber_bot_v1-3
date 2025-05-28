@@ -141,3 +141,16 @@ def create_transcript_pdf(text: str, date_str: str) -> Path:
 
     c.save()
     return path
+
+
+
+# === Генерация TXT-файла из текста транскрипции ===
+def create_transcript_txt(text: str, date_str: str) -> Path:
+    filename = f"Совещание_расшифровка_{date_str}.txt"
+    path = Path(tempfile.gettempdir()) / filename
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+
+    return path
+
