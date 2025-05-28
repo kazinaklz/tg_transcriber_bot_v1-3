@@ -61,10 +61,12 @@ async def upload_file_to_gigachat(file_path: Path, access_token: str) -> str:
     }
 
     with open(file_path, "rb") as f:
-        file_bytes = f.read()
+        file_bytes = f.read()       # Читаем содержимое файла в байтах
 
     data = aiohttp.FormData()
-    data.add_field("file", file_bytes, filename=file_path.name, content_type="application/pdf")
+    # Добавляем только .txt файл с нужным MIME-типом
+    data.add_field("file", file_bytes, filename=file_path.name, content_type="text/plain")
+    # Цель использования файла — универсальная
     data.add_field("purpose", "general")
 
     async with aiohttp.ClientSession() as session:
@@ -86,20 +88,27 @@ async def send_prompt(prompt: str, access_token: str, attachment_ids: list[str] 
         "Content-Type": "application/json",              # Отправка JSON
         "Accept": "application/json"
     }
+
+    # Формируем объект сообщения
+    message_obj = {
+        "role": "user",
+        "content": prompt
+    }
+
+    # Добавим .txt
+    if attachment_ids:
+        message_obj["attachments"] = attachment_ids
+
+
     data = {
         "model": MODEL,                                  # Используемая модель
-        "messages": [                                    # Сообщения чата
-            {"role": "user", "content": prompt}
-        ],
+        "messages": [message_obj],
         "temperature": 1,                                # Творчество модели
         "top_p": 0.9,
         "n": 1,
         "stream": False                                  # Без потоковой передачи
     }
 
-    # Добавим PDF
-    if attachment_ids:
-        data["attachments"] = attachment_ids
 
     # Отправляем POST-запрос
     async with aiohttp.ClientSession() as session:
