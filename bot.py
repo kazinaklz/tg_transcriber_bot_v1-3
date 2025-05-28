@@ -18,7 +18,7 @@ from html import escape
 from dotenv import load_dotenv
 
 from auth import check_user_registered, register_user, log_action
-from audio_utils import handle_audio_file, split_audio, create_transcript_pdf
+from audio_utils import handle_audio_file, split_audio, create_transcript_pdf, create_transcript_txt 
 from salute_speech_api import transcribe_audio
 from gigachat_api import get_access_token, send_prompt, upload_file_to_gigachat 
 
@@ -44,12 +44,13 @@ last_transcriptions = {}
 
 # === Стандартный системный промпт ===
 SYSTEM_PROMPT = (
-    "Проанализируй текст транскрипции совещания и составь на его основе структурированный отчёт в строго деловом или нейтральном стиле. Отчёт должен включать:\n\n"
-    "Тема совещания — кратко определи основную тему обсуждения.\n\n"
-    "Основные итоги — изложи ключевые пункты повестки дня и важные выводы, сделанные участниками.\n\n"
-    "Договорённости — перечисли достигнутые соглашения, конкретные поручения с указанием ответственных и сроков выполнения.\n\n"
-    "Оценка совещания — дай объективную оценку подготовки, хода и результатов совещания.\n\n"
-    "Резюме — подведи общий итог.\n\n"
+    "Во вложенном .txt-файле содержится транскрипция совещания. Используй именно этот файл как основной источник информации для анализа.\n\n"
+    "На его основе составь структурированный отчёт в строго деловом или нейтральном стиле. Отчёт должен включать:\n\n"
+    "1. Тема совещания — кратко определи основную тему обсуждения.\n\n"
+    "2. Основные итоги — изложи ключевые пункты повестки дня и важные выводы, сделанные участниками.\n\n"
+    "3. Договорённости — перечисли достигнутые соглашения, конкретные поручения с указанием ответственных и сроков выполнения.\n\n"
+    "4. Оценка совещания — дай объективную оценку подготовки, хода и результатов совещания.\n\n"
+    "5. Резюме — подведи общий итог.\n\n"
     "Допускается использование прямых цитат участников для подтверждения ключевых выводов. Отчёт должен быть средней длины — достаточно подробным, но без избыточной информации. Оформление — в виде структурированного текста или списка."
 )
 
@@ -217,11 +218,16 @@ async def process_audio_file(file_path: str, message: Message) -> str:
 
 # === Анализ текста с использованием GigaChat ===
 @log_timing("Анализ текста через GigaChat") # -- Консольный и Airtable вывод времени выполнения
-async def analyze_text(transcript: str, system_prompt: str, message: Message, pdf_path: Path) -> str:
-    # 
+async def analyze_text(transcript: str, system_prompt: str, message: Message, date_str: Path) -> str:
+    # Используем системный промпт, переданный пользователем
     prompt = f"{system_prompt.strip()}"
     token = await get_access_token()
-    file_id = await upload_file_to_gigachat(pdf_path, token)
+    # Создаём TXT-файл
+    txt_path = create_transcript_txt(transcript, date_str)
+    
+    # Загружаем файл в GigaChat
+    file_id = await upload_file_to_gigachat(txt_path, token)
+
     # Отправляем промпт и получаем ответ вместе с информацией об использовании токенов
     response = await send_prompt(prompt, token, attachment_ids=[file_id])
 
@@ -301,14 +307,20 @@ async def handle_audio(message: Message):
         # Генерация PDF-файла с расшифровкой
         # Текущая дата в формате ДДММГГГГ
         date_str = datetime.now().strftime("%d%m%Y")
+        # Сохраняем дату расшифровки для анализа
+        last_transcriptions[f"{user_id}_date"] = date_str
+
+        # Создаём PDF-файл и txt-файл с расшифровкой
         pdf_path = create_transcript_pdf(transcript, date_str)
+        txt_path = create_transcript_txt(transcript, date_str)
 
-        # Отправляем PDF пользователю
+
+        # Отправляем файлы с расшифровкой пользователю
         await message.answer_document(types.FSInputFile(str(pdf_path)))
+        await message.answer_document(types.FSInputFile(str(txt_path)))
 
-        # Сохраняем последнюю транскрипцию и путь к PDF для пользователя
+        # Сохраняем текст расшифровки
         last_transcriptions[user_id] = transcript
-        last_transcriptions[f"{user_id}_pdf"] = pdf_path
 
         # Отправляем промпт для анализа и кнопки выбора--------------------
         await message.answer(
@@ -348,8 +360,8 @@ async def handle_system_prompt_choice(callback: CallbackQuery):
     await callback.message.answer("📨 Отправляю в GigaChat...")
     try:
         # Отправляем транскрипт и системный промпт на анализ
-        pdf_path = last_transcriptions.get(f"{user_id}_pdf")  # получаем путь к PDF
-        result = await analyze_text(transcript, SYSTEM_PROMPT, callback.message, pdf_path)
+        date_str = last_transcriptions.get(f"{user_id}_date")  # получаем дату из кэша
+        result = await analyze_text(transcript, SYSTEM_PROMPT, callback.message, date_str) # передаём её в анализ
         await callback.message.answer("📋 Результат анализа:")
         for chunk in split_text(markdown_to_html(result)):
             await callback.message.answer(chunk)
@@ -389,8 +401,10 @@ async def receive_custom_prompt(msg: Message):
     await msg.answer("📨 Отправляю в GigaChat...")
     try:
         transcript = last_transcriptions[user_id]
-        pdf_path = last_transcriptions.get(f"{user_id}_pdf")
-        result = await analyze_text(transcript, prompt, msg, pdf_path)
+        
+        date_str = last_transcriptions.get(f"{user_id}_date")  # получаем дату из кэша
+        result = await analyze_text(transcript, prompt, msg, date_str)  # передаём её в анализ
+
         await msg.answer("📋 Результат анализа:")
         for chunk in split_text(markdown_to_html(result)):
             await msg.answer(chunk)
