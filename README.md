@@ -51,6 +51,13 @@ AIRTABLE_API_TOKEN=токен_доступа
 AIRTABLE_BASE_ID=идентификатор_базы
 AIRTABLE_TABLE_MAIN=название_таблицы_основной
 AIRTABLE_TABLE_LOG=название_таблицы_логов
+
+# === GIGACHAT MODEL ===
+GIGACHAT_MODEL=GigaChat-Max
+
+# === Управление уровнем логирования ===
+LOG_LEVEL=INFO
+
 ```
 ---
 
