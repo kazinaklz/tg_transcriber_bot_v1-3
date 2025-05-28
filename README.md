@@ -21,8 +21,8 @@
 ```bash
 git clone https://github.com/kazinaklz/tg_transcriber_bot_v1-3
 cd tg_transcriber_bot_v1-3
-python3 -m venv ven
-venv\Scripts\activate
+python3 -m venv venv
+.\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 python bot.py
 Ctrl + C   # остановить бота

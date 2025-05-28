@@ -63,7 +63,7 @@ async def transcribe_audio(file_path: Path) -> str:
     else:
         raise ValueError(f"Неподдерживаемый тип файла для Salute: {suffix}")
 
-    print(f"[DEBUG] Распознаю файл: {file_path.name}, тип: {content_type}")
+    print(f"Распознаю файл: {file_path.name}, тип: {content_type}")
 
 
     headers = {

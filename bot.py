@@ -6,8 +6,10 @@ import time
 import logging
 import re
 
+from pathlib import Path
+from datetime import datetime
 from aiogram import Bot, Dispatcher, Router, F, types
-from aiogram.enums import ParseMode
+from aiogram.enums import ParseMode, ContentType
 from aiogram.filters import Command
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
@@ -16,9 +18,11 @@ from html import escape
 from dotenv import load_dotenv
 
 from auth import check_user_registered, register_user, log_action
-from audio_utils import handle_audio_file, split_audio
+from audio_utils import handle_audio_file, split_audio, create_transcript_pdf
 from salute_speech_api import transcribe_audio
-from gigachat_api import get_access_token, send_prompt
+from gigachat_api import get_access_token, send_prompt, upload_file_to_gigachat 
+
+
 
 # === Настройка окружения и бота ===
 load_dotenv()
@@ -31,7 +35,9 @@ router = Router()
 dp.include_router(router)
 
 # === Настройка логирования ===
-logging.basicConfig(level=logging.INFO)
+log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(level=getattr(logging, log_level, logging.INFO))
+
 
 # === Хранилище последних расшифровок пользователей ===
 last_transcriptions = {}
@@ -103,15 +109,28 @@ def log_timing(name: str):
 
 # === Скачивание файла из Telegram ===
 @log_timing("Скачивание файла с Telegram") # -- Консольный вывод времени выполнения
-async def download_telegram_file(file_id: str) -> str:
+async def download_telegram_file(file_id: str, temp_paths: list[str]) -> str:
     # Получаем информацию о файле по его ID через Telegram API
-    file_info = await bot.get_file(file_id)
+    try:
+        # Получаем информацию о файле
+        file_info = await bot.get_file(file_id)
+        print(f"[DEBUG] file_id: {file_id}")
+        print(f"[DEBUG] file_path: {file_info.file_path}")
+        print(f"[DEBUG] file_size: {file_info.file_size}")
+        print(f"[DEBUG] file_info: {file_info}")
+
+    except Exception as e:
+        # Telegram не дал скачать файл — возможно, он слишком большой
+        raise Exception(f"❌ Ошибка при получении файла из Telegram: {e}")
+
+
 
     # Формируем прямую ссылку для скачивания файла
     file_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
 
     # Создаем временный файл заранее, чтобы сохранить в него содержимое
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+    temp_paths.append(temp_file.name)
 
     # Асинхронно загружаем файл
     async with aiohttp.ClientSession() as session:
@@ -198,11 +217,36 @@ async def process_audio_file(file_path: str, message: Message) -> str:
 
 # === Анализ текста с использованием GigaChat ===
 @log_timing("Анализ текста через GigaChat") # -- Консольный и Airtable вывод времени выполнения
-async def analyze_text(transcript: str, system_prompt: str, message: Message) -> str:
-    # Формируем итоговый промпт: объединяем системную инструкцию и текст транскрипта
-    prompt = f"{system_prompt.strip()}\n\n{transcript.strip()}"
+async def analyze_text(transcript: str, system_prompt: str, message: Message, pdf_path: Path) -> str:
+    # 
+    prompt = f"{system_prompt.strip()}"
     token = await get_access_token()
-    return await send_prompt(prompt, token)
+    file_id = await upload_file_to_gigachat(pdf_path, token)
+    # Отправляем промпт и получаем ответ вместе с информацией об использовании токенов
+    response = await send_prompt(prompt, token, attachment_ids=[file_id])
+
+    result_text = response["content"]
+    usage = response.get("usage", {})
+
+    # Извлекаем количество использованных токенов
+    used_prompt = usage.get("prompt_tokens", "?")
+    used_completion = usage.get("completion_tokens", "?")
+    total = usage.get("total_tokens", "?")
+
+    # Лог в консоль
+    logging.info(f"Токены: prompt = {used_prompt}, completion = {used_completion}, total = {total}")
+
+    # Лог в Airtable
+    user_id = message.from_user.id
+    username = message.from_user.username
+    await log_action(
+        user_id, 
+        username, 
+        f"[📊] Токены: prompt = {used_prompt}, completion = {used_completion}, total = {total}"
+        )
+
+    # Возвращаем только содержимое ответа от GigaChat
+    return result_text
 
 
 
@@ -217,7 +261,7 @@ async def cmd_start(message: Message):
     user = await check_user_registered(user_id)
     if user:
         await message.answer(
-            f"Здравствуйте, <b>{user.get('ФИО', ['Пользователь'])[0]}</b>! Вы авторизованы.",
+            f"Здравствуйте, <b>{user.get('ИО', ['Пользователь'])[0]}</b>! Вы авторизованы.",
             reply_markup=start_keyboard
         )
         await message.answer("📤 Отправьте аудиофайл для расшифровки.")
@@ -243,7 +287,8 @@ async def handle_audio(message: Message):
     try:
         await message.answer("📥 Загружаю аудиофайл...")
         # Скачиваем файл с Telegram-серверов
-        downloaded_path = await download_telegram_file(file.file_id)
+        downloaded_path = await download_telegram_file(file.file_id, temp_paths)
+        # Добавляем путь к временному файлу для последующей очистки
         temp_paths.append(downloaded_path)
 
         await message.answer("🛠 Обрабатываю аудио...")
@@ -252,12 +297,19 @@ async def handle_audio(message: Message):
         if not transcript:
             await message.answer("❌ Не удалось распознать речь.")
             return
-        # Отправляем пользователю расшифровку
-        await message.answer("✅ Вот текст:")
-        for chunk in split_text(escape(transcript)):
-            await message.answer(chunk)
-        # Сохраняем последнюю транскрипцию для пользователя в памяти
+        
+        # Генерация PDF-файла с расшифровкой
+        # Текущая дата в формате ДДММГГГГ
+        date_str = datetime.now().strftime("%d%m%Y")
+        pdf_path = create_transcript_pdf(transcript, date_str)
+
+        # Отправляем PDF пользователю
+        await message.answer_document(types.FSInputFile(str(pdf_path)))
+
+        # Сохраняем последнюю транскрипцию и путь к PDF для пользователя
         last_transcriptions[user_id] = transcript
+        last_transcriptions[f"{user_id}_pdf"] = pdf_path
+
         # Отправляем промпт для анализа и кнопки выбора--------------------
         await message.answer(
             f"🧠 Вот стандартный промпт для анализа расшифровки:\n\n{escape(SYSTEM_PROMPT)}",
@@ -296,7 +348,8 @@ async def handle_system_prompt_choice(callback: CallbackQuery):
     await callback.message.answer("📨 Отправляю в GigaChat...")
     try:
         # Отправляем транскрипт и системный промпт на анализ
-        result = await analyze_text(transcript, SYSTEM_PROMPT, callback.message)
+        pdf_path = last_transcriptions.get(f"{user_id}_pdf")  # получаем путь к PDF
+        result = await analyze_text(transcript, SYSTEM_PROMPT, callback.message, pdf_path)
         await callback.message.answer("📋 Результат анализа:")
         for chunk in split_text(markdown_to_html(result)):
             await callback.message.answer(chunk)
@@ -335,7 +388,9 @@ async def receive_custom_prompt(msg: Message):
     prompt = msg.text
     await msg.answer("📨 Отправляю в GigaChat...")
     try:
-        result = await analyze_text(last_transcriptions[user_id], prompt, msg)
+        transcript = last_transcriptions[user_id]
+        pdf_path = last_transcriptions.get(f"{user_id}_pdf")
+        result = await analyze_text(transcript, prompt, msg, pdf_path)
         await msg.answer("📋 Результат анализа:")
         for chunk in split_text(markdown_to_html(result)):
             await msg.answer(chunk)

@@ -4,6 +4,15 @@ import subprocess
 from pathlib import Path
 from pydub import AudioSegment
 
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.units import mm
+from pathlib import Path
+import tempfile
+
+
 SUPPORTED_FORMATS = ['.mp3', '.flac', '.ogg', '.wav']
 NEED_CONVERT_FORMATS = ['.mp4', '.m4a']   # Конвертировать в mp3 (ffmpeg)
 
@@ -66,3 +75,69 @@ def split_audio(file_path: Path, chunk_ms: int = 58000) -> list[Path]:
         output_paths.append(chunk_path)
 
     return output_paths
+
+
+
+# === Регистрация шрифта с поддержкой кириллицы ===
+font_path = os.path.join("fonts", "DejaVuSans.ttf")
+pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
+
+# === Генерация PDF-файла из текста транскрипции ===
+def create_transcript_pdf(text: str, date_str: str) -> Path:
+    """
+    Создаёт PDF-файл с текстом транскрипта.
+
+    :param text: Расшифрованный текст совещания.
+    :param date_str: Дата в формате 'ДДММГГГГ' для включения в имя файла.
+    :return: Путь к созданному PDF-файлу.
+    """
+    filename = f"Совещание_расшифровка_{date_str}.pdf"
+    # Используем временную директорию
+    path = Path(tempfile.gettempdir()) / filename
+
+    # Настройки страницы и форматирования
+    page_width, page_height = A4                   # размеры страницы A4
+    margin_x = 15 * mm                             # отступы слева и справа
+    margin_y = 15 * mm                             # отступы сверху и снизу
+    usable_width = page_width - 2 * margin_x       # ширина, доступная для текста
+    usable_height = page_height - 2 * margin_y     # высота, доступная для текста
+    line_height = 12                               # высота строки в пикселях
+
+    # Создаём PDF-объект и задаём шрифт
+    c = canvas.Canvas(str(path), pagesize=A4)
+    c.setFont("DejaVuSans", 12)
+
+    # Начальные координаты (левый верхний угол, с учётом отступов)
+    x = margin_x
+    y = page_height - margin_y  # старт сверху
+
+    # Разбивка текста по строкам и страницам
+    for paragraph in text.split("\n"):               # разбиваем на абзацы
+        words = paragraph.split(" ")                 # разбиваем абзац на слова
+        line = ""                                    # буфер текущей строки
+        for word in words:
+            test_line = line + word + " "
+            # Проверяем, помещается ли строка в доступную ширину
+            if pdfmetrics.stringWidth(test_line, "DejaVuSans", 12) < usable_width:
+                line = test_line
+            else:
+                # Если строка не помещается, печатаем текущую строку
+                if y - line_height < margin_y:
+                    c.showPage()                     # создаём новую страницу
+                    c.setFont("DejaVuSans", 12)
+                    y = page_height - margin_y
+                c.drawString(x, y, line)
+                y -= line_height
+                line = word + " "
+
+        # Печатаем последнюю строку в абзаце
+        if line:
+            if y - line_height < margin_y:
+                c.showPage()
+                c.setFont("DejaVuSans", 12)
+                y = page_height - margin_y
+            c.drawString(x, y, line)
+            y -= line_height
+
+    c.save()
+    return path

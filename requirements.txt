@@ -3,4 +3,4 @@ aiohttp
 pydub
 ffmpeg-python       # ffmpeg установлен в системе (это не Python-библиотека!)
 python-dotenv
-
+reportlab==3.6.12   # pdf
